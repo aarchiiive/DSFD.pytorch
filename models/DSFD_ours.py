@@ -240,42 +240,35 @@ class DeepUNetDecoder(nn.Module):
         p2: (N, c2, H2, W2)
         p1: (N, c1, H1, W1)
         """
-        print(f"p1: {p1.shape}, p2: {p2.shape}, p3: {p3.shape}, p4: {p4.shape}, p5: {p5.shape}")
-
+        # print(f"p1: {p1.shape}, p2: {p2.shape}, p3: {p3.shape}, p4: {p4.shape}, p5: {p5.shape}")
 
         # 1) p5 -> upsample -> concat p44
         # x = self.up1(p5)
-        # print(x.shape, p4.shape)
         x = torch.cat([p5, p4], dim=1)
         x = self.dc1(x)
 
         # 2) x -> upsample -> concat p3
         x = self.up2(x)
-        print(x.shape, p3.shape)
         x = torch.cat([x, p3], dim=1)
         x = self.dc2(x)
 
         # 3) x -> upsample -> concat p2
         x = self.up3(x)
-        print(x.shape, p2.shape)
         x = torch.cat([x, p2], dim=1)
         x = self.dc3(x)
 
         # 4) x -> upsample -> concat p1
         x = self.up4(x)
-        print(x.shape, p1.shape)
         x = torch.cat([x, p1], dim=1)
         x = self.dc4(x)
 
         # 5) x -> upsample -> double_conv
         x = self.up5(x)
         x = self.up6(x)
-        print(x.shape)
         x = self.dc5(x)
 
         # 6) 최종 1x1 conv -> (N, out_ch, H1, W1)
         x = self.out_conv(x)
-        print(x.shape)
 
         return x
 
@@ -401,7 +394,7 @@ class DSFD(nn.Module):
                 self.priors_pal2.type(type(x.data))
             )
 
-        else: # training
+        elif self.training: # training
             output = (
                 loc_pal1.view(loc_pal1.size(0), -1, 4),
                 conf_pal1.view(conf_pal1.size(0), -1, self.num_classes),
@@ -410,6 +403,15 @@ class DSFD(nn.Module):
                 conf_pal2.view(conf_pal2.size(0), -1, self.num_classes),
                 self.priors_pal2,
             ), decoded_image
+        else: # validation
+            output = (
+                loc_pal1.view(loc_pal1.size(0), -1, 4),
+                conf_pal1.view(conf_pal1.size(0), -1, self.num_classes),
+                self.priors_pal1,
+                loc_pal2.view(loc_pal2.size(0), -1, 4),
+                conf_pal2.view(conf_pal2.size(0), -1, self.num_classes),
+                self.priors_pal2,
+            )
         return output
 
     def load_weights(self, base_file):
