@@ -8,7 +8,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
-from utils.augmentations import preprocess, to_chw_bgr
+from utils.augmentations import preprocess, preprocess_pair, to_chw_bgr
 
 
 class DarkFaceDataset(Dataset):
@@ -16,7 +16,9 @@ class DarkFaceDataset(Dataset):
         super().__init__()
 
         self.data_dir = Path(data_dir)
+        self.method = method
         self.phase = phase
+
         self.max_pixels = max_pixels
         self.img_mean = np.array([104., 117., 123.])[:, np.newaxis, np.newaxis].astype('float32')
 
@@ -47,7 +49,7 @@ class DarkFaceDataset(Dataset):
 
             for line in meta_lines:
                 line = line.strip().split()
-                if method == 'default':
+                if method in ['default', 'Ours']:
                     filename = self.data_dir / 'image' / Path(line[0]).name
                 elif method == 'SCI':
                     filename = self.data_dir / 'SCI' / Path(line[0]).with_suffix('.jpg').name
@@ -99,18 +101,22 @@ class DarkFaceDataset(Dataset):
                 self.labels = self.labels[:num_samples]
 
         self.num_samples = len(self.filenames)
-        print(self.num_samples)
+        # print(self.num_samples)
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, index):
         if not self.phase == 'test':
-            img, target, img_path, h, w = self.pull_item(index)
-            return img, target, img_path
+            if self.method == 'Ours':
+                img, fft_img, target, img_path = self.pull_item(index)
+                return img, fft_img, target
+            else:
+                img, target, img_path = self.pull_item(index)
+                return img, target, img_path
         else:
             img, img_path = self.pull_item(index)
-            return img, img_path, w, h
+            return img, img_path
 
     def pull_item(self, index):
         while True:
@@ -125,7 +131,15 @@ class DarkFaceDataset(Dataset):
                     np.array(self.boxes[index]), img_width, img_height)
                 label = np.array(self.labels[index])
                 bbox_labels = np.hstack((label[:, np.newaxis], boxes)).tolist()
-                img, sample_labels = preprocess(img, bbox_labels, self.phase, image_path)
+                if self.method == 'Ours':
+                    fft_img_path = self.data_dir / 'FFT_fusion' / Path(image_path).with_suffix('.jpg').name
+                    fft_img = Image.open(fft_img_path)
+                    if fft_img.mode == 'L':
+                        fft_img = fft_img.convert('RGB')
+                    # fft_img = np.array(fft_img)
+                    img, fft_img, sample_labels = preprocess_pair(img, fft_img, bbox_labels, self.phase, image_path)
+                else:
+                    img, sample_labels = preprocess(img, bbox_labels, self.phase, image_path)
                 sample_labels = np.array(sample_labels)
                 if len(sample_labels) > 0:
                     target = np.hstack(
@@ -147,7 +161,10 @@ class DarkFaceDataset(Dataset):
                 img = torch.from_numpy(img).unsqueeze(0)
 
         if not self.phase == 'test':
-            return torch.from_numpy(img), target, str(image_path), img_height, img_width
+            if self.method == 'Ours':
+                return torch.from_numpy(img), torch.from_numpy(fft_img), target, str(image_path)
+            else:
+                return torch.from_numpy(img), target, str(image_path)
         else:
             return torch.from_numpy(img), str(image_path)
 
@@ -171,11 +188,19 @@ def collate_fn(batch):
             2) (list of tensors) annotations for a given image are stacked on
                                  0 dim
     """
-    targets = []
+    # targets = []
+    # imgs = []
+    # paths = []
+    # for sample in batch:
+    #     imgs.append(sample[0])
+    #     targets.append(torch.FloatTensor(sample[1]))
+    #     paths.append(sample[2])
+    # return torch.stack(imgs, 0), targets, paths
     imgs = []
-    paths = []
+    fft_imgs = []
+    targets = []
     for sample in batch:
         imgs.append(sample[0])
-        targets.append(torch.FloatTensor(sample[1]))
-        paths.append(sample[2])
-    return torch.stack(imgs, 0), targets, paths
+        fft_imgs.append(sample[1])
+        targets.append(torch.FloatTensor(sample[2]))
+    return torch.stack(imgs, 0), torch.stack(fft_imgs, 0), targets
