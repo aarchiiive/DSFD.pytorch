@@ -856,3 +856,478 @@ def preprocess(img, bbox_labels, mode, image_path):
     #img = img * cfg.scale
 
     return img, sampled_labels
+
+
+# -----------------------------
+# 아래 함수/클래스/변수들은 기존 코드대로 있다고 가정
+# (sampler, expand_image, anchor_crop_image_sampling, generate_batch_samples,
+#  crop_image, distort_image, to_chw_bgr, cfg 등)
+# -----------------------------
+
+def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
+    """
+    사용자님이 주신 기존 'preprocess' 로직을 그대로 따라가되,
+    - 원본(img)에만 color distortion 적용
+    - expand, anchor_crop, random crop, mirror, resize 등 기하학 변환은
+      img와 fft_img에 동일 파라미터 적용
+    - 최종 (img, fft_img, sampled_labels)를 반환
+
+    img, fft_img : 둘 다 PIL.Image
+    bbox_labels  : [[class, x1, y1, x2, y2], ...]  (0~1 정규화 좌표)
+    mode         : 'train' or 'test'
+    image_path   : (기존과 동일, 필요하면 사용)
+    """
+    img_width, img_height = img.size
+
+    # sample_labels = bbox_labels 를 유지 (원본 코드와 동일)
+    sampled_labels = bbox_labels
+
+    # -----------------------
+    # (1) mode=='train'일 때
+    # -----------------------
+    if mode == 'train':
+        # 1-A. distortion: img만 적용, fft_img는 적용 X
+        if cfg.apply_distort:
+            img = distort_image(img)
+
+        # 1-B. expand_image: (img, fft_img, bbox_labels) 모두에 동일 파라미터 적용
+        if cfg.apply_expand:
+            (img, fft_img,
+             bbox_labels,  # expand_image 후 label 업데이트
+             img_width, img_height) = expand_image_pair(img, fft_img, bbox_labels, img_width, img_height)
+
+        # batch_sampler = []  # 원본 코드와 동일
+        batch_sampler = []
+        prob = np.random.uniform(0., 1.)
+
+        # 1-C. anchor sampling vs. generate_batch_samples
+        if prob > cfg.data_anchor_sampling_prob and cfg.anchor_sampling:
+            scale_array = np.array([16, 32, 64, 128, 256, 512])
+            '''
+            batch_sampler.append(
+                sampler(1, 50, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.6, 0.0, True))
+            sampled_bbox = generate_batch_random_samples(
+                batch_sampler, bbox_labels, img_width, img_height, scale_array,
+                cfg.resize_width, cfg.resize_height)
+            '''
+            # PIL -> np.array
+            img_np = np.array(img)
+            fft_np = np.array(fft_img)
+
+            # anchor_crop_image_sampling_pair 로직 (2장 처리)
+            img_cropped, fft_cropped, sampled_labels = anchor_crop_image_sampling_pair(
+                img_np, fft_np, bbox_labels, scale_array, img_width, img_height
+            )
+
+            # 최종 PIL로 복원
+            img = Image.fromarray(img_cropped.astype('uint8'))
+            fft_img = Image.fromarray(fft_cropped.astype('uint8'))
+
+            '''
+            if len(sampled_bbox) > 0:
+                idx = int(np.random.uniform(0, len(sampled_bbox)))
+                img, sampled_labels = crop_image_sampling(
+                    img, bbox_labels, sampled_bbox[idx], img_width, img_height,
+                    cfg.resize_width, cfg.resize_height, cfg.min_face_size)
+            '''
+        else:
+            # batch_sampler 5개 추가
+            batch_sampler.append(sampler(1, 50, 1.0, 1.0, 1.0, 1.0,
+                                         0.0, 0.0, 1.0, 0.0, True))
+            batch_sampler.append(sampler(1, 50, 0.3, 1.0, 1.0, 1.0,
+                                         0.0, 0.0, 1.0, 0.0, True))
+            batch_sampler.append(sampler(1, 50, 0.3, 1.0, 1.0, 1.0,
+                                         0.0, 0.0, 1.0, 0.0, True))
+            batch_sampler.append(sampler(1, 50, 0.3, 1.0, 1.0, 1.0,
+                                         0.0, 0.0, 1.0, 0.0, True))
+            batch_sampler.append(sampler(1, 50, 0.3, 1.0, 1.0, 1.0,
+                                         0.0, 0.0, 1.0, 0.0, True))
+
+            sampled_bbox = generate_batch_samples(
+                batch_sampler, bbox_labels, img_width, img_height
+            )
+
+            # 원본 코드처럼 np.array 변환 후 crop
+            img_np = np.array(img)
+            fft_np = np.array(fft_img)
+
+            if len(sampled_bbox) > 0:
+                idx = int(np.random.uniform(0, len(sampled_bbox)))
+                chosen_bbox = sampled_bbox[idx]
+
+                # crop_image_pair
+                img_cropped, fft_cropped, sampled_labels = crop_image_pair(
+                    img_np, fft_np, bbox_labels,
+                    chosen_bbox, img_width, img_height,
+                    cfg.resize_width, cfg.resize_height, cfg.min_face_size
+                )
+
+                img = Image.fromarray(img_cropped.astype('uint8'))
+                fft_img = Image.fromarray(fft_cropped.astype('uint8'))
+            else:
+                img = Image.fromarray(img_np.astype('uint8'))
+                fft_img = Image.fromarray(fft_np.astype('uint8'))
+
+        # (train) 분기 종료
+
+    # -----------------------
+    # (2) 이미지 리사이즈 (mode 무관)
+    # -----------------------
+    interp_mode = [
+        Image.BILINEAR, Image.HAMMING, Image.NEAREST, Image.BICUBIC,
+        Image.LANCZOS
+    ]
+    interp_indx = np.random.randint(0, 5)
+
+    # print(f"Type of fft_img: {type(fft_img)}")
+    img = img.resize((cfg.resize_width, cfg.resize_height),
+                     resample=interp_mode[interp_indx])
+    fft_img = fft_img.resize((cfg.resize_width, cfg.resize_height),
+                             resample=interp_mode[interp_indx])
+
+    # -----------------------
+    # (3) mirror (mode=='train'일 때)
+    # -----------------------
+    if mode == 'train':
+        mirror = int(np.random.uniform(0, 2))
+        if mirror == 1:
+            # 두 이미지 모두 좌우 반전
+            img = np.array(img)[:, ::-1, :]
+            fft_img_arr = np.array(fft_img)[:, ::-1, :]
+
+            img = Image.fromarray(img.astype('uint8'))
+            fft_img = Image.fromarray(fft_img_arr.astype('uint8'))
+
+            # 라벨 뒤집기
+            for i in six.moves.xrange(len(sampled_labels)):
+                tmp = sampled_labels[i][1]
+                sampled_labels[i][1] = 1 - sampled_labels[i][3]
+                sampled_labels[i][3] = 1 - tmp
+
+    # -----------------------
+    # (4) 최종: to_chw_bgr, float32, mean subtraction
+    # -----------------------
+    img = np.array(img)
+    fft_img = np.array(fft_img)
+
+    cv2.imwrite('img.jpg', img)
+    cv2.imwrite('fft_img.jpg', fft_img)
+    np.save('sampled_labels.npy', sampled_labels)
+
+    img = to_chw_bgr(img)
+    fft_img = to_chw_bgr(fft_img)
+
+    img = img.astype('float32')
+    fft_img = fft_img.astype('float32')
+
+    img -= cfg.img_mean
+    fft_img -= cfg.img_mean
+
+    # 원본 코드처럼, 마지막에 RGB 순서로 바꾸려면 이미 to_chw_bgr에서 BGR 됐는데,
+    # 다시 img[[2,1,0],:,:] 하는 부분이 있었음
+    # => 주어진 코드에선 "img = img[[2,1,0],:,:]  # to RGB" 라고 되어 있는데
+    #    이미 to_chw_bgr에서 (BGR) 됐으니, 그대로 맞춰줌
+    img = img[[2, 1, 0], :, :]
+    fft_img = fft_img[[2, 1, 0], :, :]
+
+    return img, fft_img, sampled_labels
+
+
+def expand_image_pair(img, fft_img, bbox_labels, img_width, img_height):
+    """
+    원본 코드의 expand_image와 동일 로직 + 두 이미지를 같이 적용.
+    - 랜덤 expand_ratio, w_off, h_off 적용
+    - expand된 새 (img, fft_img, bbox_labels, new_w, new_h) 리턴
+    """
+    prob = np.random.uniform(0, 1)
+    if prob < cfg.expand_prob and (cfg.expand_max_ratio - 1.) >= 0.01:
+        expand_ratio = np.random.uniform(1, cfg.expand_max_ratio)
+        new_w = int(img_width * expand_ratio)
+        new_h = int(img_height * expand_ratio)
+
+        h_off = math.floor(np.random.uniform(0, new_h - img_height))
+        w_off = math.floor(np.random.uniform(0, new_w - img_width))
+
+        # (B, G, R) => cfg.img_mean
+        expand_img = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+        expand_fft = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+        mean_val = np.uint8(cfg.img_mean)  # [104,117,123] 등
+        expand_img[:] = mean_val
+        expand_fft[:] = mean_val
+
+        # PIL -> np
+        img_np = np.array(img)
+        fft_np = np.array(fft_img)
+
+        expand_img[h_off:h_off+img_height, w_off:w_off+img_width] = img_np
+        expand_fft[h_off:h_off+img_height, w_off:w_off+img_width] = fft_np
+
+        # bbox 변환
+        # expand_bbox = bbox(...) => transform_labels() 로직
+        expand_bbox = bbox(
+            -w_off / float(img_width),
+            -h_off / float(img_height),
+            (new_w - w_off) / float(img_width),
+            (new_h - h_off) / float(img_height),
+        )
+        new_labels = transform_labels(bbox_labels, expand_bbox)
+
+        # 결과를 PIL로
+        img_expanded = Image.fromarray(expand_img.astype('uint8'))
+        fft_expanded = Image.fromarray(expand_fft.astype('uint8'))
+
+        return img_expanded, fft_expanded, new_labels, new_w, new_h
+    else:
+        # expand 안 함
+        return img, fft_img, bbox_labels, img_width, img_height
+
+
+def crop_image_pair(
+    img_np, fft_np, bbox_labels,
+    chosen_bbox, img_width, img_height,
+    resize_w, resize_h, min_face_size
+):
+    """
+    원본 코드의 crop_image 함수와 동일 로직을
+    두 장(img_np, fft_np)에 대해 적용.
+    chosen_bbox : [xmin, ymin, xmax, ymax] (정규화)
+    - 픽셀 좌표로 변환 -> crop -> 라벨도 보정
+    - (resize_w, resize_h) 로 최종 리사이즈
+    """
+    # 1) 픽셀 변환
+    x1 = int(chosen_bbox.xmin * img_width)
+    y1 = int(chosen_bbox.ymin * img_height)
+    x2 = int(chosen_bbox.xmax * img_width)
+    y2 = int(chosen_bbox.ymax * img_height)
+
+    # 2) crop
+    cropped_img = img_np[y1:y2, x1:x2]
+    cropped_fft = fft_np[y1:y2, x1:x2]
+
+    # 3) 라벨 보정
+    new_labels = []
+    cw = (x2-x1)
+    ch = (y2-y1)
+    for lb in bbox_labels:
+        cls_, bx1, by1, bx2, by2 = lb
+        # 픽셀 좌표
+        px1 = bx1*img_width
+        py1 = by1*img_height
+        px2 = bx2*img_width
+        py2 = by2*img_height
+
+        # 박스가 crop 내부에 있는지 -> meet_emit_constraint 등
+        # 간단히 중심이 crop 내부에 있는지
+        cx = (px1+px2)/2.
+        cy = (py1+py2)/2.
+        if (cx >= x1 and cx <= x2) and (cy >= y1 and cy <= y2):
+            # crop offset 보정
+            px1 -= x1
+            px2 -= x1
+            py1 -= y1
+            py2 -= y1
+            # min_face_size 필터
+            if (px2-px1)*(py2-py1) < (min_face_size*min_face_size):
+                continue
+            # 정규화
+            nx1 = px1/cw
+            ny1 = py1/ch
+            nx2 = px2/cw
+            ny2 = py2/ch
+            # clip
+            nx1 = max(0, min(nx1,1))
+            nx2 = max(0, min(nx2,1))
+            ny1 = max(0, min(ny1,1))
+            ny2 = max(0, min(ny2,1))
+            if nx2>nx1 and ny2>ny1:
+                new_labels.append([cls_, nx1, ny1, nx2, ny2])
+
+    # 4) 최종 리사이즈
+    cropped_img = cv2.resize(cropped_img, (resize_w, resize_h),
+                             interpolation=cv2.INTER_AREA)
+    cropped_fft = cv2.resize(cropped_fft, (resize_w, resize_h),
+                             interpolation=cv2.INTER_AREA)
+
+    return cropped_img, cropped_fft, new_labels
+
+
+def anchor_crop_image_sampling_pair(img_np, fft_np, bbox_labels, scale_array, img_width, img_height):
+    """
+    원본 anchor_crop_image_sampling을 'pair' 버전으로.
+    - 동일 파라미터(배율, crop 영역 등)를 이용해 img_np와 fft_np를 함께 잘라낸다.
+    - bbox_labels도 최종 crop 결과에 맞춰 업데이트
+    - 반환: (img_cropped, fft_cropped, new_labels)
+    """
+    # 기존 anchor_crop_image_sampling 로직 복붙 후, 두 장 동시 처리
+    # 아래는 간소화 예시이므로, 세부 로직(조건/확률)은 기존 코드와 동일하게 맞춰주세요.
+    # -----------------------------------------------------------------
+
+    # 1) img_np, fft_np를 anchor 방식으로 resize
+    resized_img, resized_fft, boxes_labels = _anchor_resize_pair(
+        img_np, fft_np, bbox_labels, scale_array, img_width, img_height
+    )
+
+    # 2) crop 영역 찾기 => 50번 시도
+    #    원본 코드와 동일하게 center check 등
+    cropped_img, cropped_fft, new_labels = _anchor_crop_after_resize(
+        resized_img, resized_fft, boxes_labels
+    )
+
+    return cropped_img, cropped_fft, new_labels
+
+
+def _anchor_resize_pair(img_np, fft_np, bbox_labels, scale_array, w, h):
+    """
+    anchor_crop_image_sampling 내부에 있던
+    'ratio' 계산 + 두 이미지를 같이 resize + bbox도 스케일 조정
+    """
+    # 만약 bbox_labels가 0개면 그냥 반환
+    if len(bbox_labels) == 0:
+        return img_np, fft_np, bbox_labels
+
+    # rand_idx 박스 골라 side 결정
+    rand_idx = np.random.randint(len(bbox_labels))
+    # pixel 좌표 => (x1 = bbox_labels[i][1]*w, ...)
+    boxes_in_pixel = []
+    for b in bbox_labels:
+        cls_, x1, y1, x2, y2 = b
+        boxes_in_pixel.append([cls_, x1*w, y1*h, x2*w, y2*h])
+    boxes_in_pixel = np.array(boxes_in_pixel)
+
+    bw = boxes_in_pixel[rand_idx, 3] - boxes_in_pixel[rand_idx, 1] + 1
+    bh = boxes_in_pixel[rand_idx, 4] - boxes_in_pixel[rand_idx, 2] + 1
+    area = bw * bh
+    side = math.sqrt(area)
+
+    # anchor_idx
+    infDistance = 9999999
+    anchor_idx = 5
+    for i, anchor in enumerate(scale_array):
+        if abs(anchor - side) < infDistance:
+            infDistance = abs(anchor - side)
+            anchor_idx = i
+
+    # 예: target_anchor
+    # 원본 코드처럼 ratio = (target_anchor / side) * 2^(random.uniform(-1,1))
+    target_anchor = scale_array[anchor_idx] if anchor_idx < len(scale_array) else scale_array[-1]
+    ratio = float(target_anchor) / side
+    ratio *= (2 ** random.uniform(-1, 1))
+
+    # maxSize 체크 등
+    maxSize = 12000
+    if (w*ratio)*(h*ratio) > maxSize*maxSize:
+        ratio = math.sqrt((maxSize*maxSize) / (w*h))
+
+    # interpolation
+    interp_methods = [cv2.INTER_LINEAR, cv2.INTER_CUBIC, cv2.INTER_AREA,
+                      cv2.INTER_NEAREST, cv2.INTER_LANCZOS4]
+    interp = random.choice(interp_methods)
+
+    newW = int(w*ratio)
+    newH = int(h*ratio)
+
+    # resize 두 장
+    resized_img = cv2.resize(img_np, (newW, newH), interpolation=interp)
+    resized_fft = cv2.resize(fft_np, (newW, newH), interpolation=interp)
+
+    # bbox도 조정
+    scaled_bboxes = []
+    for b in boxes_in_pixel:
+        cls_, px1, py1, px2, py2 = b
+        # ratio 곱
+        sx1 = px1*ratio
+        sy1 = py1*ratio
+        sx2 = px2*ratio
+        sy2 = py2*ratio
+        # 다시 0~1 정규화 (newW,newH)
+        scaled_bboxes.append([
+            cls_,
+            sx1/newW, sy1/newH,
+            sx2/newW, sy2/newH
+        ])
+
+    return resized_img, resized_fft, scaled_bboxes
+
+
+def _anchor_crop_after_resize(img_np, fft_np, boxes_labels):
+    """
+    resize된 상태에서 crop 시도 (최대 50번), center-in-patch 등
+    """
+    h, w, _ = img_np.shape
+
+    sample_boxes = []
+    crop_w, crop_h = cfg.resize_width, cfg.resize_height  # 예시
+    for _ in range(50):
+        if crop_w < w:
+            w_off = int(np.random.uniform(0, w-crop_w))
+        else:
+            w_off = 0
+        if crop_h < h:
+            h_off = int(np.random.uniform(0, h-crop_h))
+        else:
+            h_off = 0
+
+        rect = np.array([w_off, h_off, w_off+crop_w, h_off+crop_h])
+        # center check
+        centers = []
+        for b in boxes_labels:
+            _, x1, y1, x2, y2 = b
+            cx = (x1+x2)/2.0
+            cy = (y1+y2)/2.0
+            centers.append((cx, cy))
+        centers = np.array(centers)
+        # pixel 단위 center => centers[:,0]*w, ...
+        px = centers[:,0]*w
+        py = centers[:,1]*h
+
+        m1 = (rect[0] <= px) * (rect[1] <= py)
+        m2 = (rect[2] >= px) * (rect[3] >= py)
+        mask = m1*m2
+        if not mask.any():
+            continue
+        else:
+            sample_boxes.append(rect)
+
+    if len(sample_boxes)==0:
+        # crop 실패 => 그냥 반환
+        return img_np, fft_np, boxes_labels
+
+    chosen_rect = random.choice(sample_boxes)
+    cx1, cy1, cx2, cy2 = chosen_rect
+
+    # crop
+    cropped_img = img_np[cy1:cy2, cx1:cx2, :].copy()
+    cropped_fft = fft_np[cy1:cy2, cx1:cx2, :].copy()
+    cropH, cropW = cropped_img.shape[:2]
+
+    # bbox 보정
+    new_labels = []
+    for b in boxes_labels:
+        cls_, x1, y1, x2, y2 = b
+        # 픽셀단위로
+        px1 = x1*w
+        py1 = y1*h
+        px2 = x2*w
+        py2 = y2*h
+        cx = (px1+px2)/2.
+        cy = (py1+py2)/2.
+        if (cx1<=cx<=cx2) and (cy1<=cy<=cy2):
+            # crop offset
+            px1 -= cx1
+            px2 -= cx1
+            py1 -= cy1
+            py2 -= cy1
+            # 다시 정규화
+            nx1 = px1/cropW
+            ny1 = py1/cropH
+            nx2 = px2/cropW
+            ny2 = py2/cropH
+            # clip
+            nx1 = max(0, min(nx1,1))
+            ny1 = max(0, min(ny1,1))
+            nx2 = max(0, min(nx2,1))
+            ny2 = max(0, min(ny2,1))
+            if nx2>nx1 and ny2>ny1:
+                new_labels.append([cls_, nx1, ny1, nx2, ny2])
+
+    return cropped_img, cropped_fft, new_labels
