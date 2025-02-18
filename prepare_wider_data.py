@@ -10,7 +10,7 @@ from data.config import cfg
 import cv2
 
 # WIDER_ROOT = os.path.join(cfg.HOME, 'WIDER')
-WIDER_ROOT = '../datasets/WiderFace'
+WIDER_ROOT = '/home/ubuntu/data/WiderFace'
 train_list_file = os.path.join(WIDER_ROOT, 'wider_face_split',
                                'wider_face_train_bbx_gt.txt')
 val_list_file = os.path.join(WIDER_ROOT, 'wider_face_split',
