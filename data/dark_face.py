@@ -113,7 +113,7 @@ class DarkFaceDataset(Dataset):
                 return img, fft_img, target
             else:
                 img, target, img_path = self.pull_item(index)
-                return img, target, img_path
+                return img, target
         else:
             img, img_path = self.pull_item(index)
             return img, img_path
@@ -188,19 +188,20 @@ def collate_fn(batch):
             2) (list of tensors) annotations for a given image are stacked on
                                  0 dim
     """
-    # targets = []
-    # imgs = []
-    # paths = []
-    # for sample in batch:
-    #     imgs.append(sample[0])
-    #     targets.append(torch.FloatTensor(sample[1]))
-    #     paths.append(sample[2])
-    # return torch.stack(imgs, 0), targets, paths
-    imgs = []
-    fft_imgs = []
     targets = []
+    imgs = []
+    # paths = []
     for sample in batch:
         imgs.append(sample[0])
-        fft_imgs.append(sample[1])
-        targets.append(torch.FloatTensor(sample[2]))
-    return torch.stack(imgs, 0), torch.stack(fft_imgs, 0), targets
+        targets.append(torch.FloatTensor(sample[1]))
+        # paths.append(sample[2])
+    return torch.stack(imgs, 0), targets #, paths
+
+    # imgs = []
+    # fft_imgs = []
+    # targets = []
+    # for sample in batch:
+    #     imgs.append(sample[0])
+    #     fft_imgs.append(sample[1])
+    #     targets.append(torch.FloatTensor(sample[2]))
+    # return torch.stack(imgs, 0), torch.stack(fft_imgs, 0), targets
