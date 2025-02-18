@@ -12,8 +12,7 @@ from torch.utils.data import DataLoader
 from torchvision.ops import box_iou
 
 from data.config import cfg
-from models.factory import build_net
-from models.DSFD_ours import DSFD, build_net_resnet
+from models.DSFD_ours import build_net_resnet
 from layers.modules import MultiBoxLoss
 from layers.functions import Detect
 
