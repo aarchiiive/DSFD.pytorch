@@ -7,42 +7,29 @@ from torch.utils.data import DataLoader
 
 from data.config import cfg
 from data.dark_face import DarkFaceDataset, collate_fn
-from metrics import eval_image, image_pr_info, save_pr_curve
-
-def norm_score(org_pred_list):
-    norm_pred_list = []
-    max_score = torch.finfo(torch.float32).min
-    min_score = torch.finfo(torch.float32).max
-
-    for i in range(len(org_pred_list)):
-        pred = org_pred_list[i]
-        scores = pred[..., 4]
-        max_score = max(max_score, scores.max())
-        min_score = min(min_score, scores.min())
-
-    for i in range(len(org_pred_list)):
-        pred = org_pred_list[i]
-        scores = pred[..., 4]
-        if max_score != min_score:
-            norm_scores = (scores - min_score) / (max_score - min_score)
-        else:
-            norm_scores = (scores - (min_score - 1))
-        org_pred_list[i][..., 4] = norm_scores
-
-    norm_pred_list = org_pred_list
-    return norm_pred_list
+from metrics import norm_score, eval_image, image_pr_info, save_pr_curve
 
 if __name__ == "__main__":
     ### Configurations
-    method = 'Ours'
+    # method = 'Ours'
+    # method = 'SCI'
+    method = 'default'
     num_classes = 2
     num_samples = None
     model_name = 'resnet50'
-    device = torch.device('cuda:0')
+    device = torch.device('cpu')
 
-    batch_size = 128
-    num_workers = 8
-    weights_path = 'runs/20250214_223548_DSDF-Ours-resnet-pretrained/weights/epoch_100.pt'
+    batch_size = 4
+    num_workers = 32
+    # weights_path = 'runs/20250214_223548_DSDF-Ours-resnet-pretrained/weights/epoch_100.pt'
+    # weights_path = 'runs/20250213_170459_DSDF-Wider-Face-pretrained/weights/epoch_100.pt'
+    # weights_path = 'runs/DSFD-Wider-Face/weights/epoch_100.pth'
+    # weights_path = 'runs/20250217_000550_DSDF-SCI-resnet-pretrained/weights/epoch_100.pt'
+    weights_path = 'runs/20250217_161621_DSDF-baseline-resnet-pretrained-epoch300/weights/epoch_80.pt'
+    # weights_path = 'runs/20250213_170459_DSDF-Wider-Face-pretrained/weights/epoch_100.pt'
+    # weights_path = 'runs/20250216_085104_DSDF-baseline-resnet-pretrained/weights/epoch_80.pt'
+    # weights_path = 'runs/DSFD-baseline/weights/epoch_95.pth'
+    # weights_path = 'runs/DSFD-SCI/weights/epoch_95.pth'
     resume = None
 
     ## Eval
@@ -59,7 +46,7 @@ if __name__ == "__main__":
         data_dir,
         val_meta,
         num_samples=num_samples,
-        method=method,
+        method='default',
         phase='val'
     )
     val_loader = DataLoader(
@@ -74,8 +61,15 @@ if __name__ == "__main__":
     if method == 'Ours':
         from models.DSFD_ours import build_net_resnet
         model = build_net_resnet('test', num_classes, model_name)
-        model.load_state_dict(torch.load(weights_path, map_location='cpu')['model'])
+    else:
+        from models.factory import build_net
+        model = build_net('test', num_classes, model_name)
 
+    state_dict = torch.load(weights_path, map_location='cpu')
+    if 'model' in state_dict:
+        model.load_state_dict(state_dict['model'])
+    else:
+        model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
 
@@ -85,14 +79,17 @@ if __name__ == "__main__":
     all_targets = [] # [[N, 5], [N, 5], ...] X K
 
     max_images = 10000000
-    for i, (images, fft_images, targets) in enumerate(tbar):
+    for i, (images, targets) in enumerate(tbar):
         images = images.to(device)
         targets = [target.to(device) for target in targets]
         with torch.no_grad():
             preds = model(images)
-        preds = preds[..., [1, 2, 3, 4, 0]] # confxyxy -> xyxyconf (swap)
-        all_preds.append(preds) # [1, 2, 750, 5]
-        all_targets.append(targets) # [[N, 5], [N, 5], ...]
+
+        # print(f"targets: {targets[0].shape}")
+        if targets[0].shape[0] > 0:
+            preds = preds[..., [1, 2, 3, 4, 0]] # confxyxy -> xyxyconf (swap)
+            all_preds.append(preds) # [1, 2, 750, 5]
+            all_targets.append(targets) # [[N, 5], [N, 5], ...]
 
         if i == max_images - 1:
             break
@@ -122,7 +119,7 @@ if __name__ == "__main__":
         pr_curve[i, 0] = org_pr_curve[i, 1] / org_pr_curve[i, 0]
         pr_curve[i, 1] = org_pr_curve[i, 1] / num_faces
 
-    with open(Path(weights_path).parent / 'pr_curve.pkl', 'wb') as f:
+    with open(Path(weights_path).parent.parent / 'pr_curve.pkl', 'wb') as f:
         pickle.dump(pr_curve, f)
 
-    save_pr_curve(pr_curve, 'pr_curve.png')
+    ap = save_pr_curve(pr_curve, Path(weights_path).parent.parent / 'pr_curve.png')
