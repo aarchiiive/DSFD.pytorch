@@ -50,10 +50,10 @@ _C.CLIP = False
 _C.VARIANCE = [0.1, 0.2]
 
 # detection config
-_C.NMS_THRESH = 0.3
+_C.NMS_THRESH = 0.005
 _C.NMS_TOP_K = 5000
 _C.TOP_K = 750
-_C.CONF_THRESH = 0.05
+_C.CONF_THRESH = 0.005
 
 # loss config
 _C.NEG_POS_RATIOS = 3
