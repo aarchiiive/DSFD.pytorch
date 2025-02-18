@@ -224,11 +224,15 @@ def save_pr_curve(pr_curve: torch.Tensor, save_path: str) -> None:
     df = pd.DataFrame({'Recall': recall, 'Precision': precision})
 
     sns.set(style='whitegrid')
+    sns.set_palette("bright")
     plt.figure(figsize=(8, 6))
-    sns.lineplot(x='Recall', y='Precision', data=df, marker='o')
+    sns.lineplot(x='Recall', y='Precision', data=df)
     plt.title('Precision-Recall Curve')
     plt.xlabel('Recall')
     plt.ylabel('Precision')
     plt.grid(True)
     plt.show()
     plt.savefig(save_path)
+    plt.close()
+
+    return ap
