@@ -19,6 +19,42 @@ from metrics import norm_score, eval_image, image_pr_info, save_pr_curve
 
 KST = pytz.timezone('Asia/Seoul')
 
+class Scheduler:
+    def __init__(self, optimizer, gamma, lr_steps, default_lr=1e-4, warmup_lr=1e-6, start_iteration=0, warmup_iter=1000):
+        self.iteration = start_iteration
+        self.warmup_iter = warmup_iter
+        self.default_lr = default_lr
+        self.warmup_lr = warmup_lr
+        self.lr = warmup_lr
+        self.lr_steps = lr_steps
+        self.step_index = 0
+        self.gamma = gamma
+
+        if start_iteration > warmup_iter:
+            for step in self.lr_steps:
+                if start_iteration > step:
+                    self.step_index += 1
+            self.lr = default_lr * (self.gamma ** self.step_index)
+        else:
+            self.lr = warmup_lr + (default_lr - warmup_lr) / warmup_iter * start_iteration
+
+        self.update_param(optimizer)
+
+    def update(self, optimizer):
+        self.iteration += 1
+        if self.iteration < self.warmup_iter:
+            self.lr = self.warmup_lr + (self.default_lr - self.warmup_lr) / self.warmup_iter * self.iteration
+            self.update_param(optimizer)
+        elif self.iteration in self.lr_steps:
+            self.step_index += 1
+            self.lr = self.default_lr * (self.gamma ** self.step_index)
+            self.update_param(optimizer)
+        return self.lr
+
+    def update_param(self, optimizer):
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = self.lr
+
 def adjust_learning_rate(optimizer, lr, gamma, step):
     """Sets the learning rate to the initial LR decayed by 10 at every
         specified step
@@ -31,7 +67,8 @@ def adjust_learning_rate(optimizer, lr, gamma, step):
 
 if __name__ == '__main__':
     ### Configurations
-    method = 'default'
+    # method = 'default'
+    method = 'Ours'
     # method = 'SCI'
     num_classes = 2
     num_samples = None
@@ -40,22 +77,30 @@ if __name__ == '__main__':
     # dataset_name = 'wider_face'
 
     ### Loss, Optimizer
-    learning_rate = 1e-3
+    learning_rate = 1e-4
     weight_decay = 5e-4
     momentum = 0.9
     gamma = 0.1
     # lr_steps = [160000, 200000, 240000] # batch_size=8
     # lr_steps = [80000, 100000, 120000] # batch_size=16
-    lr_steps = [40000, 50000, 60000] # batch_size=32
+    # lr_steps = [40000, 50000, 60000] # batch_size=32
+
+    ### HLA-Face
+    lr_steps = [20000, 100000] # batch_size=8
+    # lr_steps = [10000, 50000] # batch_size=16
+    # lr_steps = [5000, 25000] # batch_size=32
     negpos_ratio = 3
     variance = [0.1, 0.2]
     threshold = 0.5
     device = torch.device('cuda:0')
 
     ### Training
-    batch_size = 32
-    num_epochs = 300
-    max_steps = 20000000
+    batch_size = 8
+    num_epochs = 100000
+    max_steps = 70000 # batch_size=8
+    # max_steps = 35000 # batch_size=16
+    # max_steps = 17500 # batch_size=32
+
     save_freq = 5
     num_workers = 8
     pretrained_weights = 'weights/resnet50-19c8e357.pth'
@@ -77,7 +122,8 @@ if __name__ == '__main__':
 
     project_name = 'dark-face'
     # exp_name = 'DSDF-SCI-resnet-pretrained'
-    exp_name = 'DSDF-baseline-resnet-pretrained-epoch300'
+    # exp_name = 'DSDF-baseline-resnet-pretrained-epoch300'
+    exp_name = 'DSDF-Ours-resnet-pretrained-HLA-Face'
 
     if not resume:
         save_dir = Path('runs')
@@ -178,7 +224,13 @@ if __name__ == '__main__':
         raise ValueError(f"Invalid dataset name: {dataset_name}")
 
     ### Model, Loss, Optimizer
-    model = build_net('train', num_classes, model_name)
+    if method == 'Ours':
+        from models.DSFD_ours import build_net_resnet
+        model = build_net_resnet('train', num_classes, model_name)
+    else:
+        from models.factory import build_net
+        model = build_net('train', num_classes, model_name)
+
     if not resume:
         if pretrained_weights:
             state_dict = torch.load(pretrained_weights, map_location='cpu')
@@ -214,6 +266,7 @@ if __name__ == '__main__':
         nms_top_k=cfg.NMS_TOP_K
     )
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay, momentum=momentum)
+    scheduler = Scheduler(optimizer, gamma, lr_steps, learning_rate)
     criterion = MultiBoxLoss(
         num_classes=num_classes,
         negpos_ratio=negpos_ratio,
@@ -238,22 +291,29 @@ if __name__ == '__main__':
         ### Training
         model.train()
 
-        for i, (images, targets) in enumerate(tbar):
+        # for i, (images, targets) in enumerate(tbar):
+        for i, (images, fft_images, targets) in enumerate(tbar):
             if train_iter in lr_steps:
                 step_index += 1
                 adjust_learning_rate(optimizer, learning_rate, gamma, step_index)
             images = images.to(device)
+            fft_images = fft_images.to(device)
             targets = [target.to(device) for target in targets]
-            outputs = model(images)
+            # outputs = model(images)
+            outputs, decoded_image = model(images)
 
             optimizer.zero_grad()
 
             loss_l_pa1l, loss_c_pal1 = criterion(outputs[:3], targets)
             loss_l_pa12, loss_c_pal2 = criterion(outputs[3:], targets)
-            loss = loss_l_pa1l + loss_c_pal1 + loss_l_pa12 + loss_c_pal2
+            # loss = loss_l_pa1l + loss_c_pal1 + loss_l_pa12 + loss_c_pal2
+            l1_loss = F.l1_loss(decoded_image, fft_images)
+            loss = loss_l_pa1l + loss_c_pal1 + loss_l_pa12 + loss_c_pal2 + l1_loss
 
             loss.backward()
             optimizer.step()
+
+            lr = scheduler.update(optimizer)
 
             epoch_loss += loss.item()
             train_iter += 1
@@ -271,9 +331,16 @@ if __name__ == '__main__':
             }, save_dir / 'weights' / f'epoch_{epoch+1}.pt')
 
         if use_wandb:
+            # wandb.log({
+            #     # 'train/low_img': [wandb.Image(images[0], caption=f"low_img_epoch{epoch}")],
+            #     'train/loss': epoch_loss / len(train_loader),
+            # }, step=epoch)
             wandb.log({
-                # 'train/low_img': [wandb.Image(images[0], caption=f"low_img_epoch{epoch}")],
+                'train/low_img': [wandb.Image(images[0], caption=f"low_img_epoch{epoch}")],
+                'train/normal_img': [wandb.Image(fft_images[0], caption=f"normal_img_epoch{epoch}")],
+                'train/decoded_img': [wandb.Image(decoded_image[0], caption=f"decoded_img_epoch{epoch}")],
                 'train/loss': epoch_loss / len(train_loader),
+                'train/l1_loss': l1_loss.item(),
             }, step=epoch)
 
         ## Validation
@@ -284,8 +351,10 @@ if __name__ == '__main__':
 
         with torch.no_grad():
             tbar = tqdm(val_loader)
-            for images, targets in tbar:
+            # for images, targets in tbar:
+            for images, fft_images, targets in tbar:
                 images, targets = images.to(device), [t.to(device) for t in targets]
+                fft_images = fft_images.to(device)
                 outputs = model(images)
 
                 loss_l_pal1, loss_c_pal1 = criterion(outputs[:3], targets)
