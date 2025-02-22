@@ -882,25 +882,18 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
     # sample_labels = bbox_labels 를 유지 (원본 코드와 동일)
     sampled_labels = bbox_labels
 
-    # -----------------------
-    # (1) mode=='train'일 때
-    # -----------------------
     if mode == 'train':
-        # 1-A. distortion: img만 적용, fft_img는 적용 X
         if cfg.apply_distort:
             img = distort_image(img)
 
-        # 1-B. expand_image: (img, fft_img, bbox_labels) 모두에 동일 파라미터 적용
         if cfg.apply_expand:
             (img, fft_img,
              bbox_labels,  # expand_image 후 label 업데이트
              img_width, img_height) = expand_image_pair(img, fft_img, bbox_labels, img_width, img_height)
 
-        # batch_sampler = []  # 원본 코드와 동일
         batch_sampler = []
         prob = np.random.uniform(0., 1.)
 
-        # 1-C. anchor sampling vs. generate_batch_samples
         if prob > cfg.data_anchor_sampling_prob and cfg.anchor_sampling:
             scale_array = np.array([16, 32, 64, 128, 256, 512])
             '''
@@ -910,16 +903,13 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
                 batch_sampler, bbox_labels, img_width, img_height, scale_array,
                 cfg.resize_width, cfg.resize_height)
             '''
-            # PIL -> np.array
             img_np = np.array(img)
             fft_np = np.array(fft_img)
 
-            # anchor_crop_image_sampling_pair 로직 (2장 처리)
             img_cropped, fft_cropped, sampled_labels = anchor_crop_image_sampling_pair(
                 img_np, fft_np, bbox_labels, scale_array, img_width, img_height
             )
 
-            # 최종 PIL로 복원
             img = Image.fromarray(img_cropped.astype('uint8'))
             fft_img = Image.fromarray(fft_cropped.astype('uint8'))
 
@@ -931,7 +921,6 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
                     cfg.resize_width, cfg.resize_height, cfg.min_face_size)
             '''
         else:
-            # batch_sampler 5개 추가
             batch_sampler.append(sampler(1, 50, 1.0, 1.0, 1.0, 1.0,
                                          0.0, 0.0, 1.0, 0.0, True))
             batch_sampler.append(sampler(1, 50, 0.3, 1.0, 1.0, 1.0,
@@ -947,7 +936,6 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
                 batch_sampler, bbox_labels, img_width, img_height
             )
 
-            # 원본 코드처럼 np.array 변환 후 crop
             img_np = np.array(img)
             fft_np = np.array(fft_img)
 
@@ -968,11 +956,6 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
                 img = Image.fromarray(img_np.astype('uint8'))
                 fft_img = Image.fromarray(fft_np.astype('uint8'))
 
-        # (train) 분기 종료
-
-    # -----------------------
-    # (2) 이미지 리사이즈 (mode 무관)
-    # -----------------------
     interp_mode = [
         Image.BILINEAR, Image.HAMMING, Image.NEAREST, Image.BICUBIC,
         Image.LANCZOS
@@ -985,9 +968,6 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
     fft_img = fft_img.resize((cfg.resize_width, cfg.resize_height),
                              resample=interp_mode[interp_indx])
 
-    # -----------------------
-    # (3) mirror (mode=='train'일 때)
-    # -----------------------
     if mode == 'train':
         mirror = int(np.random.uniform(0, 2))
         if mirror == 1:
@@ -1004,15 +984,8 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
                 sampled_labels[i][1] = 1 - sampled_labels[i][3]
                 sampled_labels[i][3] = 1 - tmp
 
-    # -----------------------
-    # (4) 최종: to_chw_bgr, float32, mean subtraction
-    # -----------------------
     img = np.array(img)
     fft_img = np.array(fft_img)
-
-    cv2.imwrite('img.jpg', img)
-    cv2.imwrite('fft_img.jpg', fft_img)
-    np.save('sampled_labels.npy', sampled_labels)
 
     img = to_chw_bgr(img)
     fft_img = to_chw_bgr(fft_img)
@@ -1023,10 +996,6 @@ def preprocess_pair(img, fft_img, bbox_labels, mode, image_path=None):
     img -= cfg.img_mean
     fft_img -= cfg.img_mean
 
-    # 원본 코드처럼, 마지막에 RGB 순서로 바꾸려면 이미 to_chw_bgr에서 BGR 됐는데,
-    # 다시 img[[2,1,0],:,:] 하는 부분이 있었음
-    # => 주어진 코드에선 "img = img[[2,1,0],:,:]  # to RGB" 라고 되어 있는데
-    #    이미 to_chw_bgr에서 (BGR) 됐으니, 그대로 맞춰줌
     img = img[[2, 1, 0], :, :]
     fft_img = fft_img[[2, 1, 0], :, :]
 
