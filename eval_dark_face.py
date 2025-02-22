@@ -6,41 +6,56 @@ import torch
 from torch.utils.data import DataLoader
 
 from data.config import cfg
-from data.dark_face import DarkFaceDataset, collate_fn
+from data.dark_face import DarkFaceDataset, collate_fn, collate_fn_fft
 from metrics import norm_score, eval_image, image_pr_info, save_pr_curve
 
 if __name__ == "__main__":
     ### Configurations
-    # method = 'Ours'
+    method = 'Ours'
     # method = 'SCI'
-    method = 'default'
+    # method = 'default'
     num_classes = 2
     num_samples = None
     model_name = 'resnet50'
-    device = torch.device('cpu')
+    device = torch.device('cuda:0')
 
-    batch_size = 4
-    num_workers = 32
+    batch_size = 32
+    num_workers = 8
     # weights_path = 'runs/20250214_223548_DSDF-Ours-resnet-pretrained/weights/epoch_100.pt'
     # weights_path = 'runs/20250213_170459_DSDF-Wider-Face-pretrained/weights/epoch_100.pt'
     # weights_path = 'runs/DSFD-Wider-Face/weights/epoch_100.pth'
     # weights_path = 'runs/20250217_000550_DSDF-SCI-resnet-pretrained/weights/epoch_100.pt'
-    weights_path = 'runs/20250217_161621_DSDF-baseline-resnet-pretrained-epoch300/weights/epoch_80.pt'
+    # weights_path = 'runs/20250217_161621_DSDF-baseline-resnet-pretrained-epoch300/weights/epoch_80.pt'
+    # weights_path = 'runs/20250219_231740_DSDF-baseline-resnet-pretrained-HLA-Face/weights/best.pt'
+    # weights_path = 'runs/20250219_232302_DSDF-SCI-resnet-pretrained-HLA-Face/weights/best.pt'
     # weights_path = 'runs/20250213_170459_DSDF-Wider-Face-pretrained/weights/epoch_100.pt'
     # weights_path = 'runs/20250216_085104_DSDF-baseline-resnet-pretrained/weights/epoch_80.pt'
     # weights_path = 'runs/DSFD-baseline/weights/epoch_95.pth'
     # weights_path = 'runs/DSFD-SCI/weights/epoch_95.pth'
+    # weights_path = 'runs/20250220_235918_DSDF-baseline-resnet-pretrained-DAI-Net/weights/best.pt'
+    # weights_path = 'runs/20250220_235918_DSDF-baseline-resnet-pretrained-DAI-Net/weights/epoch_100.pt'
+    # weights_path = 'runs/20250220_235918_DSDF-baseline-resnet-pretrained-DAI-Net/weights/epoch_100.pt'
+    # weights_path = 'runs/20250220_235931_DSDF-SCI-resnet-pretrained-DAI-Net/weights/best.pt'
+    # weights_path = 'runs/20250220_235931_DSDF-SCI-resnet-pretrained-DAI-Net/weights/epoch_100.pt'
+    # weights_path = 'runs/20250217_161621_DSDF-baseline-resnet-pretrained-epoch300/weights/epoch_100.pt'
+    weights_path = 'runs/20250220_235744_DSDF-Ours-resnet-pretrained-DAI-Net/weights/epoch_100.pt'
+
     resume = None
 
     ## Eval
     iou_thresh = 0.5
     num_thresh = 1000
 
-    data_dir = Path('/home/ubuntu/data/DarkFace_Train_2021')
+    data_dir = Path('datasets/DarkFace_Train_2021')
     image_dir = data_dir / 'image'
     label_dir = data_dir / 'label'
     train_meta = data_dir / 'mf_dsfd_dark_face_train_5500.txt'
     val_meta = data_dir / 'mf_dsfd_dark_face_val_500.txt'
+
+    if method == 'Ours':
+        _collate_fn = collate_fn_fft
+    else:
+        _collate_fn = collate_fn
 
     val_dataset = DarkFaceDataset(
         data_dir,
@@ -53,7 +68,7 @@ if __name__ == "__main__":
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=collate_fn,
+        collate_fn=_collate_fn,
         num_workers=num_workers
     )
 
@@ -86,10 +101,10 @@ if __name__ == "__main__":
             preds = model(images)
 
         # print(f"targets: {targets[0].shape}")
-        if targets[0].shape[0] > 0:
-            preds = preds[..., [1, 2, 3, 4, 0]] # confxyxy -> xyxyconf (swap)
-            all_preds.append(preds) # [1, 2, 750, 5]
-            all_targets.append(targets) # [[N, 5], [N, 5], ...]
+        # if targets[0].shape[0] > 0:
+        preds = preds[..., [1, 2, 3, 4, 0]] # confxyxy -> xyxyconf (swap)
+        all_preds.append(preds) # [1, 2, 750, 5]
+        all_targets.append(targets) # [[N, 5], [N, 5], ...]
 
         if i == max_images - 1:
             break
