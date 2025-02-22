@@ -283,7 +283,7 @@ if __name__ == '__main__':
         train_iter = state_dict['train_iter']
         step_index = state_dict['lr_step']
         best_mAP = state_dict['best_mAP']
-        adjust_learning_rate(optimizer, learning_rate, gamma, step_index)
+        # adjust_learning_rate(optimizer, learning_rate, gamma, step_index)
 
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -293,9 +293,9 @@ if __name__ == '__main__':
 
         # for i, (images, targets) in enumerate(tbar):
         for i, (images, fft_images, targets) in enumerate(tbar):
-            if train_iter in lr_steps:
-                step_index += 1
-                adjust_learning_rate(optimizer, learning_rate, gamma, step_index)
+            # if train_iter in lr_steps:
+            #     step_index += 1
+            #     adjust_learning_rate(optimizer, learning_rate, gamma, step_index)
             images = images.to(device)
             fft_images = fft_images.to(device)
             targets = [target.to(device) for target in targets]
