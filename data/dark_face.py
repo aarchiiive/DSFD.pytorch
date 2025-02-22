@@ -53,6 +53,8 @@ class DarkFaceDataset(Dataset):
                     filename = self.data_dir / 'image' / Path(line[0]).name
                 elif method == 'SCI':
                     filename = self.data_dir / 'SCI' / Path(line[0]).with_suffix('.jpg').name
+                elif method == 'GLARE':
+                    filename = self.data_dir / 'GLARE' / Path(line[0]).with_suffix('.png').name
                 else:
                     raise ValueError(f'Invalid method: {method}')
 
@@ -131,6 +133,7 @@ class DarkFaceDataset(Dataset):
                     np.array(self.boxes[index]), img_width, img_height)
                 label = np.array(self.labels[index])
                 bbox_labels = np.hstack((label[:, np.newaxis], boxes)).tolist()
+
                 if self.method == 'Ours':
                     fft_img_path = self.data_dir / 'FFT_fusion' / Path(image_path).with_suffix('.jpg').name
                     fft_img = Image.open(fft_img_path)
@@ -140,6 +143,7 @@ class DarkFaceDataset(Dataset):
                     img, fft_img, sample_labels = preprocess_pair(img, fft_img, bbox_labels, self.phase, image_path)
                 else:
                     img, sample_labels = preprocess(img, bbox_labels, self.phase, image_path)
+
                 sample_labels = np.array(sample_labels)
                 if len(sample_labels) > 0:
                     target = np.hstack(
